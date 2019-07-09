@@ -1,0 +1,82 @@
+---
+title: "Propet notebook - Still work in process"
+output: html_notebook
+---
+### Note this notebook is a work in Progress
+
+```{r}
+library(prophet)
+train_prophet = df_day %>% filter(ds < ymd("20180101"))
+test_prophet = df_day %>% filter(ds >= ymd("20180101"))
+m = prophet(train_prophet)
+future <- make_future_dataframe(m, periods = 52, freq = "week")
+forecast <- predict(m, future)
+```
+
+```{r}
+test_pred = predict(m, test) %>% right_join(test_prophet)
+
+figure2 = df_day %>% ggplot(aes(ds, y))+
+  geom_point(color = "dark grey")+
+  geom_point(aes(ds, yhat), data = test_pred, color = "orange")+
+  # always use theme minimal! 
+  geom_smooth(aes(ds, yhat), data = test_pred, color = "orange", method = "loess", se = F)+
+  geom_point(aes(ds, pred), data = error_tbl, color = "light blue")+
+  geom_smooth(aes(ds, pred), data = error_tbl, color = "light blue", method = "loess", se = F)+
+  theme_minimal()+
+  ggtitle("Prophet Forecast",subtitle = "Prophet in orange, h20 automl in blue")
+```
+
+```{r}
+test_pred = predict(m, test) %>% right_join(test_prophet)
+figure2 + 
+  geom_point(aes(ds, yhat), data = test_pred, color = "purple", alpha = 0.6)+
+  geom_smooth(aes(ds, yhat), data = test_pred, color = "purple", alpha = 0.6)
+```
+
+
+```{r}
+fig3 = df_day %>% ggplot(aes(ds, y))+
+  geom_point(color = "dark grey")+
+  geom_point(aes(ds, yhat), data = test_pred, color = "orange")+
+  # always use theme minimal! 
+  geom_line(aes(ds, yhat), data = test_pred, color = "orange")+
+  geom_point(aes(ds, pred), data = error_tbl, color = "light blue")+
+  geom_line(aes(ds, pred), data = error_tbl, color = "light blue")+
+  theme_minimal()+
+  ggtitle("Prophet Forecast",subtitle = "Prophet in orange, h20 automl in blue")
+fig3
+```
+
+
+```{r}
+
+fig3 = ggplot(aes(ds, yhat), data = test_pred)+
+geom_point(aes(ds, yhat, text = paste("Prophet prediction: ",ds, "\n",yhat)),data = test_pred, color = "orange")+
+  # always use theme minimal! 
+  geom_smooth(aes(ds, yhat), data = test_pred, color = "orange", method = "loess", se = F)+
+  geom_point(aes(ds, pred, text = paste("Auto ML prediction: ",ds,"\n",pred)), data = error_tbl, color = "light blue")+
+  geom_point(aes(ds, y), data = df_day %>% filter(ds >= ymd("20180101")), color = "dark grey")+
+  geom_smooth(aes(ds, pred), data = error_tbl, color = "light blue", method = "loess", se = F)+
+  theme_minimal()+
+  scale_y_log10()+
+  labs(title = "Prophet Forecast",subtitle = "Prophet in orange, h20 automl in blue", x = "Date",
+          y = "Obeserved Bikers")
+ggplotly(fig3, tooltip = c("text"))
+```
+
+```{r}
+fig3 = ggplot(aes(ds, yhat), data = test_pred)+
+geom_point(aes(ds, yhat, text = paste("Prophet prediction: ",ds, "\n",yhat)),data = test_pred, color = "orange")+
+  # always use theme minimal! 
+  geom_line(aes(ds, yhat), data = test_pred, color = "orange")+
+  geom_point(aes(ds, pred, text = paste("Auto ML prediction: ",ds,"\n",pred)), data = error_tbl, color = "light blue")+
+  geom_point(aes(ds, y), data = df_day %>% filter(ds >= ymd("20180101")), color = "dark grey")+
+  geom_line(aes(ds, pred), data = error_tbl, color = "light blue")+
+  theme_minimal()+
+  scale_y_log10()+
+  labs(title = "Prophet Forecast",subtitle = "Prophet in orange, h20 automl in blue", x = "Date",
+          y = "Obeserved Bikers")
+ggplotly(fig3, tooltip = c("text"))
+```
+

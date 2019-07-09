@@ -1,0 +1,432 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(timetk)
+library(lubridate)
+library(plotly)
+### NOTE if you import fpp2 second you can use its autoplot() method. I like the ggfortify one better so I will import it last os that that one is used
+library(fpp2)
+library(ggfortify)
+source('module.r')
+# this suppresses scientific
+options(scipen = 999)
+dataframe = readRDS('seatleBike.rds')
+
+df_day = dataframe %>% 
+  select(ds = Date, y = value) %>%
+  mutate(ds = ymd(ds)) %>% 
+  filter(ds > ymd(20140101)) %>% 
+  group_by(ds) %>% 
+  summarise(y = sum(y, na.rm = T)) %>% 
+  # most recent weeek will rarely ever be complete, we don't want to add an incomplete week to our series because it's sum will obviously be lower than it should be
+  head(-1)
+
+train = df_day %>% filter(ds < ymd("20180101")) %>% convert()
+test = df_day %>% filter(ds >= ymd("20180101")) %>% convert()
+```
+
+```{r}
+figure1 = df_day %>% 
+  ggplot(aes(ds, y))+
+  geom_line()+
+  geom_line(aes(text = paste("Date: ", ds, "\nObserved Value =", y)))+
+  theme_minimal()+
+  geom_smooth(se = F)+
+  labs(title = "Daily Bicycle Traffic in Seatle", x = "Date", y = "Count Of Bikers Detected")
+ggplotly(figure1, tooltip = "text")
+```
+```{r}
+p = ggAcf(df_day %>% convert()) + theme_light() + labs(title = "ACF plot of Seattle Bikes Series")
+p
+```
+* The strongest correlation is with the most recent value. This is typical with time series
+* We can also see there is a strong negative correlation around 26 weeks. This is also expected based on the time series.
+* There is a strong correlation with the observation a year (52 weeks) prior. This is expected 
+
+Lets start off with some simple 
+
+When we have this kind of auto-correlation pattern we can typically do quite well by just guessing the value observed the previous year.  We can achieve this with the snaive() function, which creates a seasonal naive model.
+
+
+```{r}
+naiv = train %>% 
+  snaive(h=length(test), bootstrap = T, level = 0.89) 
+naiv %>% 
+  forecast_eval(model_name = "SNaive")
+```
+
+
+```{r, warnings=FALSE}
+naiv %>% 
+  forecast(length(test))%>% 
+accuracy(test) 
+```
+
+snaive:
+
+$\hat{y}_{T+h|T} = y_{T+h-m(k+1)}$
+
+* $\hat{y}_{T}$  = current period
+
+* h = forecast horizon
+
+* h|t = forecasting h steps ahead from time t
+
+* m = seasonality 
+
+* k = floor((h−1) / m) or the integer part of (h−1) / m
+
+
+
+```{r}
+naiv %>% 
+  checkresiduals()
+```
+* We can safelly say that the residuals on the train set are white noise.  I strongly dislike this method because it relies on null hypothesis tests which are quite flawed fundamentally. Thus, going forward I am not going to use this method. This method can be useful when you only have a small amount of data and splitting your data into train and test sets isn't realistic.
+
+```{r}
+ETS = train %>% 
+  ets() %>% 
+  forecast(h = length(test), bootstrap = T, level = 0.89, lamda = 'auto')
+ETS %>% 
+forecast_eval('ETS')
+```
+
+
+
+```{r, warnings = FALSE}
+ETS %>% 
+  forecast(length(test), bootstrap = T) %>% 
+accuracy(test)
+```
+If I don't bootstrap I get extremely unreasonable intervals.  
+
+```{r}
+ETS = train %>% 
+  ets() %>% 
+  forecast(h = length(test), bootstrap = F)
+ETS %>% 
+forecast_eval()
+```
+
+```{r}
+ETS = train %>% 
+  stlf() %>% 
+  forecast(h = length(test), bootstrap = T, lambda = 'auto')
+ETS %>% 
+forecast_eval()
+```
+
+
+
+```{r}
+BATS = train %>% 
+  bats() 
+BATS_for = BATS %>% 
+  forecast(h = length(test), bootstrap = T)
+
+BATS_for %>% 
+forecast_eval(model_name = "bats")
+```
+```{r}
+BATS = train %>% 
+  bats() 
+BATS_for = BATS %>% 
+  forecast(h = length(test), bootstrap = F)
+
+BATS_for %>% 
+forecast_eval(model_name = "bats")
+```
+
+
+
+```{r}
+BATS %>% 
+  plot()
+```
+
+
+
+```{r}
+BATS %>% 
+  forecast(length(test)) %>% 
+accuracy(test) 
+```
+
+
+```{r}
+TBATS = train %>% 
+  tbats()
+
+TBATS_for = TBATS %>% 
+  forecast(h = length(test))
+```
+
+
+
+```{r}
+TBATS_for %>% 
+  forecast_eval("Tbats")
+```
+
+```{r}
+TBATS %>% 
+    forecast(length(test)) %>% 
+accuracy(test) 
+```
+
+```{r}
+nnet = train %>% 
+  nnetar() %>% 
+  forecast(h = length(test), PI = T, bootstrap = T)
+
+nnet %>% 
+forecast_eval("Ar Neural Network")
+```
+
+```{r}
+aarim = train %>% 
+  auto.arima() 
+aarim %>% 
+  forecast(h = length(test),Bootstrap = T) %>% 
+  forecast_eval(model_name = "Arima")
+```
+
+
+
+```{r}
+summary(aarim)
+```
+
+
+Alright so our top performing classical forcasting model is tbats.  This comes as no suprise, tbats typically performs quite strong on weekly data. Let's zoom in on just the point estimates themselves.  I've added a loess smoother to visualize the signal that was extracted.
+```{r}
+library(sweep)
+tbats_frame  = TBATS_for %>% sw_sweep() %>% 
+  select(y, key, lo.95, hi.95) %>% 
+  bind_cols(df_day %>% select(ds, ytrue = y)) %>% 
+  filter(ds >= ymd("20180101")) 
+
+tbats_plot =tbats_frame %>% 
+  ggplot(aes(x = ds))+   
+  geom_point(aes(y = ytrue), color = "black")+
+  geom_point(aes(y = y), color = "orange", alpha = 0.6)+
+  #geom_line(aes(y = y), color = "light blue")+
+  geom_ribbon(aes(ymin=lo.95, ymax=hi.95), fill = 'grey', color = "light grey", alpha = 0.2)+
+  #geom_smooth(aes(y =y), color = "light blue", method = "loess")+
+  theme_minimal()+
+  labs(title = "TBATS Fit on Test Set", subtitle = "Test set values black, point estimate orange, 89% Prediction Interval Orange", y = "Count Of Bikers Recorded", x = "Week")
+tbats_plot
+```
+
+Data at the end is noisy because it's imputed, badly to quite honest. Signal might be closer to true biker count.
+
+```{r}
+dataframe %>% group_by(key) %>% summarise(most_recent = max(Date), start = min(Date)) %>% arrange(most_recent)
+```
+
+
+```{r}
+# shoutout to business science for continually putting out amazing packages for the community like anomalize
+library(anomalize)
+decomp_feats = df_day %>% 
+decompose_stl(target = y) %>% 
+anomalize(target = remainder, alpha = 0.2) %>% 
+mutate(anomaly = factor(anomaly, levels = c("Yes", "No"))) %>%
+as.tibble()
+
+
+
+Dates = tibble(ds = seq(min(df_day$ds), max(df_day$ds), "week")) 
+time_df = df_day %>% 
+  right_join(Dates) %>% 
+  left_join(decomp_feats) %>% 
+  fill() %>% 
+  mutate(month = month(ds), year = year(ds)) 
+
+time_df = time_df %>% 
+  mutate(target = lead(y, 1), lag2 = lag(y,1), lag3 = lag(y, 2),lag4 = lag(y, 3), 
+         lag5 = lag(y, 4), ma3 = (y + lag2 + lag3)/3, ma4 = (y + lag2 + lag3 + lag4)/4,
+         ma5 = (y + lag2 + lag3 + lag4 + lag5)/ 5, summer = if_else(month %in% c(5, 6, 7, 8), 1, 0),
+         summer = factor(summer, ordered = F, levels = c(0,1))) %>% drop_na() %>% select(-y) 
+
+
+last_obs = time_df %>% tail(1)
+
+time_df = time_df %>% head(-1) %>% 
+    select_if(~ !any(is.na(.))) %>%
+    mutate_if(is.ordered, ~ as.character(.) %>% as.factor)
+
+time_df = time_df %>% drop_na()
+
+train = time_df %>% filter(year < 2017) 
+valid = time_df %>% filter(year == 2017) 
+test = time_df %>% filter(year > 2017)
+
+```
+NOTE TO SELF: do not move h2o import, masks the lubridate month function and creates big problems
+```{r}
+library(h2o)
+h2o.init()
+h2o.no_progress()
+train_h2o <- as.h2o(train %>% select(-ds))
+valid_h2o <- as.h2o(valid %>% select(-ds))
+test_h2o  <- as.h2o(test %>% select(-ds))
+```
+
+This is how the lag and lead functions work. I wrote this quick check to confirm they worked the way I thought they did.
+
+```{r}
+tibble(test = c(1, 2, 3,4, 5)) %>% 
+  mutate(lag_test = lag(test, 1), lead_test = lead(test, 1))
+```
+
+
+```{r}
+library(xgboost)
+# Set names for h2o
+y <- "target"
+x <- setdiff(names(train_h2o), y)
+
+automl_models_h2o <- h2o.automl(
+    x = x, 
+    y = y, 
+    training_frame = train_h2o, 
+    validation_frame = valid_h2o, 
+    leaderboard_frame = test_h2o, 
+    max_runtime_secs =   60 * 60, 
+    nfold = 0,
+    # none of these will do well trust me
+    # gbm and xgboost are very similar, thats why 
+    # gbm is left out
+    exclude_algos = c("GBM","DRF", "GLM"),
+    stopping_metric = "MSE",
+    sort_metric = "MSE")
+# Extract leader model
+automl_leader <- automl_models_h2o@leader
+pred_h2o <- h2o.predict(automl_leader, newdata = test_h2o)
+h2o.performance(automl_leader, newdata = test_h2o)
+```
+
+There are NA factor levels being included in the feature importances returned by the function. I'm honestly not sure why, as we can see there are no missing values in any of the sets.  The feature importances for theses features is 0. This may simply be an indication that there are no missing values in the object. That's what I'll assume fore now.
+
+```{r}
+h2o.nacnt(train_h2o)
+h2o.nacnt(valid_h2o)
+h2o.nacnt(test_h2o)
+```
+I don't want the NA feature importances which are all 0, so I am going to filter them out before plotting.
+
+```{r}
+importance = h2o.varimp(automl_leader)
+importance %>% 
+  filter(!str_detect(variable, "NA")) %>% 
+  ggplot(aes(reorder(variable, -scaled_importance), scaled_importance))+
+  geom_col()+   
+  coord_flip()+
+  theme_minimal()+
+  labs(x = "", y= "Scaled Importance")
+```
+
+The h2o plot does not include the missing feature value importances, which likely confirms my previous suspicion.
+
+```{r}
+h2o.varimp_plot(automl_leader)
+```
+
+
+```{r}
+options(scipen = 999)
+h2o.partialPlot(automl_leader, test_h2o, 'anomaly')
+```
+
+```{r}
+automl_models_h2o
+```
+
+```{r}
+error_tbl = time_df %>% 
+filter(lubridate::year(ds) > 2017) %>%
+    add_column(pred = pred_h2o %>% as.tibble() %>% pull(predict)) %>%
+    rename(actual = y) %>%
+    mutate(
+        error     = actual - pred,
+        error_pct = error / actual
+        ) 
+
+
+time_df %>% 
+  ggplot(aes(ds, observed))+
+  geom_point(color = "dark grey")+
+  geom_point(aes(ds, pred), data = error_tbl, color = "light blue")+
+  geom_smooth(aes(ds, pred), data = error_tbl, color = "light blue", method = "loess")+
+  labs(title = "Auto ML Model Fit on Test Set")+
+  theme_minimal()+
+  labs(x = "Date", y = "Bike Traffic")
+
+```
+
+* The ML method does a better job of forecasting extreme events
+
+```{r}
+sweeped = BATS_for %>% sw_sweep() %>% 
+  select(y, key) %>% 
+  bind_cols(df_day %>% select(ds, ytrue = y)) %>% 
+  filter(ds >= ymd("20180101"))
+
+
+
+figure2 = time_df %>% 
+  ggplot(aes(ds, observed))+
+  geom_point(color = "dark grey")+
+  geom_point(aes(y = y), color = "orange", data = sweeped)+
+  geom_smooth(aes(y =y), color = "orange", method = "loess", data =sweeped, se = F)+
+  geom_point(aes(ds, pred), data = error_tbl, color = "light blue")+
+  geom_smooth(aes(ds, pred), data = error_tbl, color = "light blue", method = "loess", se = F)+
+  labs(title = "Auto ML Model Fit on Test Set", subtitle = "Blue = Auto ML, Orange = TBATS")+
+  theme_minimal()+
+  labs(x = "Date", y = "Bike Traffic")
+figure2
+```
+
+
+```{r}
+figure2 = time_df %>% 
+  filter(ds >= ymd("20180101")) %>% 
+  ggplot(aes(ds, observed))+
+  geom_point(color = "dark grey")+
+  geom_point(aes(y = y), color = "orange", data = sweeped)+
+  geom_smooth(aes(y =y), color = "orange", method = "loess", data =sweeped, se = F)+
+  geom_point(aes(ds, pred), data = error_tbl, color = "light blue")+
+  geom_smooth(aes(ds, pred), data = error_tbl, color = "light blue", method = "loess", se = F)+
+  labs(title = "Model Fit comparison", subtitle = "Blue = Auto ML, Orange = TBATS, Black = Test Set")+
+  theme_minimal()+
+  labs(x = "Date", y = "Bike Traffic")
+figure2
+```
+
+
+
+comparing our classical method back to back with the ML model we can see a clear trend.  The ML based model does a much better job of predicting the extreme events than the tbats algorithm.
+
+```{r}
+error_tbl %>%
+    summarise(
+        me   = mean(error),
+        rmse = mean(error^2)^0.5,
+        mae  = mean(abs(error)),
+        mape = mean(abs(error_pct)),
+        mpe  = mean(error_pct)
+    ) %>%
+    glimpse()
+```
+
+
+
+
+
